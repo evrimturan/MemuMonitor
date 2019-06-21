@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.*;
 
@@ -40,26 +41,37 @@ public class Main {
 
     private static String whereClause;
     private static String query;
-    private static HashMap<String, String> androidIDIndex = new HashMap<>();
+    private static HashMap<String, String> androidIdIndex = new HashMap<>();
+
 
     public static void main(String[] args) {
 
-
+        whereClause = "";
         devices = readFile();
         //TODO this list can be got using memuc listvms
 
         for(String device : devices) {
             //Done by using Android ID. There's been an error while using IMEI
             //TODO This numbers will be used to retrieve Android ID by running adb command to retrieve data from database and will be used to restart the devices
-            String out = runcmd(MemucPath + " adb -i" + device + " shell settings get secure android_id");
+            String androidIdCommand = MemucPath + " adb -i" + device + " shell settings get secure android_id";
+            String cmdOutput = runcmd(androidIdCommand);
+            String androidId = produceOutput(cmdOutput, androidIdCommand);
             //TODO Need to figure out what exactly the String out is to create the exact Where Clause string
+            if(whereClause.length() == 0) {
+                whereClause += "where time = " + androidId;
+            }
+            else {
+                whereClause += " or time = " + androidId;
+            }
             //TODO HashMap key Android ID, value String device
-            //androidIDIndex.put(androidID, device). Need to get androidID from out variable
+            androidIdIndex.put(androidId, device); // Need to get androidId from out variable
         }
 
         //TODO The string of Where Clause of SQL query will be written here
         //TODO Select Clause should contain just guid and time and FROM Clause is campaignUp.device
         //TODO The string of the whole query will be written here
+
+        query = "select guid, time from campaignUp.device " + whereClause;
 
 
         try {
@@ -95,6 +107,38 @@ public class Main {
     public static void retrieveData(Connection con, Statement stmt, String query) {
         //TODO SQL query will be written here and logic of monitoring will be implemented
         //TODO The name of method can be changed
+        try {
+            ResultSet resultSet = stmt.executeQuery(query);
+            while(resultSet.next()) {
+                String dbGuid = resultSet.getString(1);
+                String dbTime = resultSet.getString(2);
+
+                long nowLong = Calendar.getInstance().getTimeInMillis();
+                long dbTimeLong = Long.parseLong(dbTime);
+
+                String index = androidIdIndex.get(dbGuid);
+
+                String runningCommand = MemucPath + " isvmrunning -i" + index;
+                String cmdOutput = runcmd(runningCommand);
+                String isRunning = produceOutput(cmdOutput, runningCommand);
+
+                if((nowLong - dbTimeLong >= 1000 * 60 * 5)) {
+                    //TODO if it is running restart it, but if it is not running start it
+                    if(isRunning.equals("Running")) {
+                        restartDevices(index);
+                    }
+                    else if(isRunning.equals("Not Running")) {
+                        startDevice(index);
+                    }
+                }
+            }
+        }
+        catch (Exception e) {
+            System.out.println(e.getMessage());
+            System.out.println(e.getStackTrace());
+        }
+
+
 
         //TODO if there are 5 minute difference between time stamp of the device and now, the index of device will be found using androidIDIndex HashMap
         //TODO The devices will be restarted
@@ -168,6 +212,12 @@ public class Main {
         int j = output.lastIndexOf(System.getProperty("user.dir")+">");
         String _output = output.substring(i,j);
         return _output.contains(check);
+    }
+
+    private static String produceOutput(String output, String command){
+        int i = output.lastIndexOf(command)+command.length();
+        int j = output.lastIndexOf(System.getProperty("user.dir")+">");
+        return output.substring(i,j);
     }
 
     private static void restartDevices(Set<String> Devices) {
